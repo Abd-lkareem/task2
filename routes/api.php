@@ -2,10 +2,8 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-use App\http\Controllers\AuthController;
-use App\models\User; 
-use App\Events\UserRegistered;
-use Carbon\Carbon;
+
+
 
 /*
 |--------------------------------------------------------------------------
@@ -19,25 +17,8 @@ use Carbon\Carbon;
 */
 
 
-Route::post('/signup', [AuthController::class, 'signup']);
-Route::post('/verify/{user}', [AuthController::class, 'verify']);
-Route::post('/login', [AuthController::class, 'login'])->name('login');
+$api_path = '/Api';
 
-Route::middleware('auth:sanctum', 'ability:issue-access-token')->group(function () {
-    Route::get('/refresh-token', [AuthController::class, 'refreshToken']);
+Route::prefix('api')->group(function() use($api_path){
+    include __DIR__ . "{$api_path}/auth.php";
 });
-
-Route::middleware("auth:sanctum")->group(function () {
-    Route::delete("logout", [AuthController::class, "logout"]);
-    Route::get("/test", function(){
-
-        $user = auth()->user();
-        // $accessToken = $user->createToken('access_token', ['issue-access-token'], Carbon::now()->addMinutes(config('sanctum.expiration')));
-    
-        return $user;
-    });
-    
-    
-});
-
-

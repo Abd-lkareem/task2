@@ -6,39 +6,33 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Hash;
 use App\models\User;    
+use App\Http\Requests;
 use Illuminate\Support\Str; 
 use App\Events\UserRegistered;
 use Carbon\Carbon;
+use App\Traits\FileOperations;
+use App\Traits\Responses;
+use App\Http\Requests\LoginRequest;
+use App\Http\Requests\SignUpRequest;
+use App\Http\Requests\VerifyRequest;
+
 
 
 class AuthController extends Controller
 {
-    public function signup(Request $request)
-    {
-        $validator = Validator::make($request->all(),[
-            'email' => 'required|unique:users|email',
-            'phone_number' => 'required|numeric',
-            'password' => 'required|min:7|confirmed',
-            'username' => 'required|string' ,
-            'profile_photo' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048', 
-            'certificate' => 'required|mimes:pdf|max:2048', 
-        ]);
-        if ($validator->fails()) 
-            return $validator->errors();
-    
-        $validated = $validator->validated();
-        
-        $imagePath =  $request->file('profile_photo')->store('images', 'public');
-        $pdfPath = $request->file('certificate')->store('pdfs', 'public');
-        $code = $this->generate_code();
+    use FileOperations , Responses;
 
-        
-    
+    public function signup(SignUpRequest $request)
+    {
+        $imagePath = $this->upload($request->file('profile_photo'), "test_name", 'images');
+        $pdfPath = $this->upload($request->file('certificate'), null, 'pdfs');
+        $code = $this->generate_code();
+            
         $user = User::create([
-            'username' => $validated['username'],
-            'email' => $validated['email'],
-            'password' => Hash::make($validated['password']),
-            'phone_number' => $validated['phone_number'] , 
+            'username' => $request->username,
+            'email' => $request->email,
+            'password' => Hash::make($request->password),
+            'phone_number' => $request->phone_number , 
             'profile_photo' => $imagePath , 
             'certificate' => $pdfPath ,
             'code' => $code , 
@@ -47,24 +41,15 @@ class AuthController extends Controller
     
         event(new UserRegistered($user));
 
+        $message = 'a message sent to your email box to verify your eamil';
+
+        return $this->apiSuccess(['user' => $user] , $message , 201);
     
-        return response()->json([
-            'user' => $user , 
-            'message'=>'a messaeg sent to your email box to verify your eamil'], 201);
     }
     
-    public function verify(Request $request , User $user)
+    public function verify(VerifyRequest $request , User $user)
     {
-        $validator = Validator::make($request->all(),[
-            'code' => 'required|string|size:6'
-        ]);
-
-        if ($validator->fails()) 
-            return $validator->errors();
-    
-        $validated = $validator->validated();
-        $code = $validated['code'];
-
+        $code = $request->code;
         $message = "the code that you entered is incorrect";
 
         if($user->code == $code)
@@ -75,86 +60,67 @@ class AuthController extends Controller
 
             if($minuteDiff <= 3)
             {
+                $data = ['token'=> $user->createToken('access_token', ['access-api'], Carbon::now()->addMinutes(config('sanctum.ac_expiration'))) ,
+                'refresh_token '=>$user->createToken('refresh_token', ['issue-access-token'], Carbon::now()->addMinutes(config('sanctum.rt_expiration')))];
 
-                $accessToken = $user->createToken('access_token', ['access-api'], Carbon::now()->addMinutes(config('sanctum.ac_expiration')));
-                $refreshToken = $user->createToken('refresh_token', ['issue-access-token'], Carbon::now()->addMinutes(config('sanctum.rt_expiration')));
-        
-
+                $message = "your verification done succesufully";
                 $user->update([
                     'email_verified_at' => now()
                 ]);
 
-                return  response()->json([
-                    'token' => $accessToken->plainTextToken,
-                    'refresh_token' => $refreshToken->plainTextToken,
-                    "messgae" => "your verification done succesufully" ]   , 200);
+                
+                return $this->apiSuccess($data , $message , 200);
+
             }
 
             $message = "the code is not valid now";
                 
         }
+            return $this->apiError(message:$message);
 
-        return response()->json([
-            'message'=>$message], 403);
         
     }
 
-    public function login(Request $request)
+    public function login(LoginRequest $request)
     {
-        $validator = Validator::make($request->all(),[
-            'email' => 'required|exists:users,email',
-            'password' => 'required|min:7',
-            // 'phone_number' => 'required|exists:users,phone_number' ,
-        ]);
-        if ($validator->fails()) 
-            return $validator->errors();
+        $credentials = [
+            'email' => request('email'),
+            'password' => request('password'),
+        ];
+        $message =  "password or email are invalid";
 
-        $validated = $validator->validated();
+        if (auth::attempt($credentials)) {
+            if(auth()->user()->email_verified_at)
+                return $this->apiSuccess(data:['token' => $user->createToken('authToken')->plainTextToken]);
 
-        $user = User::where('email' , $validated['email' ])->first();
-
-        if($user && is_null($user->email_verified_at))
-        {
+            
             event(new UserRegistered($user));
-                
-            return response()->json([
-                'user' => $user , 
-                'message'=>'a messaeg sent to your email box to verify your eamil'], 201);
-        }
-
-        if($user && Hash::check($validated['password'] , $user->password ) )
-        {
-            $user->tokens()->delete();
- 
-            return response()->json([
-                'token' => $user->createToken('authToken')->plainTextToken
-            ]);
+            $message =  "a messaeg sent to your email box to verify your eamil";
+            return $this->apiSuccess(message:$message);
 
         }
 
-        return response()->json([
-            'message' => "password or email are invalid"
-        ], 403);
+        return $this->apiError(message:$message);
+            
         
     }
 
-    
     public function logout(Request $request)
     {
         $request->user()->tokens()->delete();
+        $message = 'User logged out successfully';
 
-        return response()->json(
-        [
-                'message' => 'User logged out successfully'
-        ] , 200);
-
+        return $this->apiSuccess(message: $message );
 
     }
 
     public function refreshToken(Request $request)
     {
         $accessToken = $request->user()->createToken('access_token', ['access-api'], Carbon::now()->addMinutes(config('sanctum.ac_expiration')));
-        return response(['message' => "Token refreshed succesufully ", 'token' => $accessToken->plainTextToken]);
+        $message = "Token refreshed succesufully ";
+        $data= ['token' => $accessToken->plainTextToken];
+
+        return $this->apiSuccess($data , $message );
     }
 
     private function generate_code()
